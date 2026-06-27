@@ -374,6 +374,92 @@ def render_full(clips: list[ClipSync], master_wav_path: str, opts: RenderOptions
     return out
 
 
+def render_endscreen(src_path: str, opts: RenderOptions, out_path: str,
+                     *, width: int = 0, height: int = 0,
+                     duration: float = 10.0, begin=None, tick=None) -> Path:
+    """
+    Render an endscreen clip ready to concatenate after a full output.
+
+    Images (.png/.jpg/etc.) are looped for `duration` seconds and converted to
+    H.264 matching `opts`. Videos are re-encoded with the same settings. Both
+    get a fade-in from opts.fade_color so the transition from the last clip's
+    fade-out is seamless.
+
+    width/height: scale image to this resolution (0 = use source dims). Pass
+    the resolution of the full output so combine_clips can stream-copy.
+    """
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    info = media.probe(src_path)
+    is_image = info.duration < 0.5 or (info.v_codec or "").lower() in (
+        "png", "mjpeg", "bmp", "gif")
+    clip_dur = duration if is_image else info.duration
+    has_src_audio = info.has_audio and not is_image
+
+    eff_fade = min(opts.fade, max(0.0, clip_dur / 2 - 0.05)) if opts.fade > 0 else 0.0
+    c = opts.fade_color
+    f_d = f"{eff_fade:.3f}"
+
+    if begin:
+        begin(clip_dur)
+
+    cmd = ["ffmpeg", "-y", "-v", "error"]
+    if is_image:
+        cmd += ["-loop", "1", "-i", src_path,
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+        vid_idx, aud_idx = 0, 1
+    elif not has_src_audio:
+        cmd += ["-i", src_path,
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+        vid_idx, aud_idx = 0, 1
+    else:
+        cmd += ["-i", src_path]
+        vid_idx, aud_idx = 0, 0
+
+    v_chain: list[str] = []
+    if is_image and width > 0 and height > 0:
+        v_chain.append(
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        )
+    if eff_fade > 0:
+        v_chain.append(f"fade=t=in:st=0:d={f_d}:color={c}")
+
+    if v_chain and eff_fade > 0:
+        filt = (
+            f"[{vid_idx}:v]{','.join(v_chain)}[v];"
+            f"[{aud_idx}:a]afade=t=in:st=0:d={f_d}[a]"
+        )
+        cmd += ["-filter_complex", filt, "-map", "[v]", "-map", "[a]"]
+    elif v_chain:
+        cmd += ["-vf", ",".join(v_chain),
+                "-map", f"{vid_idx}:v", "-map", f"{aud_idx}:a"]
+    elif eff_fade > 0:
+        filt = (
+            f"[{vid_idx}:v]fade=t=in:st=0:d={f_d}:color={c}[v];"
+            f"[{aud_idx}:a]afade=t=in:st=0:d={f_d}[a]"
+        )
+        cmd += ["-filter_complex", filt, "-map", "[v]", "-map", "[a]"]
+    else:
+        cmd += ["-map", f"{vid_idx}:v", "-map", f"{aud_idx}:a"]
+
+    cmd += ["-t", str(clip_dur)]
+    cmd += _video_flags(opts, copy_ok=False)
+    cmd += ["-c:a", "aac", "-ar", "44100", "-b:a", opts.audio_bitrate]
+    if opts.container == "mp4":
+        cmd += ["-movflags", "+faststart"]
+
+    if tick is None:
+        proc = subprocess.run(cmd + [str(out)], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"endscreen render failed:\n{proc.stderr.strip()}")
+    else:
+        _run_streaming(cmd + ["-progress", "pipe:1", "-nostats", str(out)],
+                       clip_dur, tick, "endscreen")
+    return out
+
+
 def combine_clips(clip_paths: list[str], out_path: str, opts: RenderOptions,
                   begin=None, tick=None) -> Path:
     """

@@ -290,6 +290,50 @@ def main() -> int:
     else:
         ok &= _check("fade_sides", False, "skip: no multi full_show to probe")
 
+    # ── endscreen tests ──────────────────────────────────────────────────────
+    print()
+    print("=== Endscreen ===")
+
+    es_dir = work / "endscreen"
+    es_opts = rnd.RenderOptions(out_dir=str(es_dir), encoder="software",
+                                preset="ultrafast", fade=1.0)
+
+    # 11) image endscreen: PNG → 5s video, fades in, correct duration
+    es_clip_path = es_dir / "es.mp4"
+    es_clip_path.parent.mkdir(parents=True, exist_ok=True)
+    es_ticks = []
+    rnd.render_endscreen(
+        str(logo), es_opts, str(es_clip_path),
+        width=640, height=360, duration=5.0,
+        tick=es_ticks.append,
+    )
+    if es_clip_path.exists():
+        fi_es = media.probe(es_clip_path)
+        ok &= _check("endscreen/image",
+                     fi_es.has_video and abs(fi_es.duration - 5.0) < 0.5,
+                     f"{fi_es.duration:.1f}s h264={fi_es.v_codec}")
+        luma_es_head = _luma_at(str(es_clip_path), seek=0.1, window=0.4)
+        ok &= _check("endscreen/fade-in",
+                     luma_es_head < 50,
+                     f"head luma={luma_es_head:.1f} (expect dark — fading from black)")
+    else:
+        ok &= _check("endscreen/image", False, "no output")
+
+    # 12) endscreen appended to full_performance (focus combine)
+    if fp_path.exists():
+        dur_before = media.probe(fp_path).duration
+        import shutil as _sh
+        fp2 = focus_dir / "fp_with_es.mp4"
+        _sh.copy2(fp_path, fp2)  # work on a copy to preserve original for other checks
+        rnd.combine_clips([str(fp2), str(es_clip_path)], str(fp2.parent / "fp_final.mp4"), focus_opts)
+        fi_fp_final = media.probe(str(fp2.parent / "fp_final.mp4"))
+        ok &= _check("endscreen/focus-append",
+                     abs(fi_fp_final.duration - (dur_before + fi_es.duration)) < 1.5,
+                     f"{fi_fp_final.duration:.1f}s "
+                     f"(combine {dur_before:.0f}s + endscreen {fi_es.duration:.0f}s)")
+    else:
+        ok &= _check("endscreen/focus-append", False, "no full_performance to append to")
+
     print()
     print("RESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
     return 0 if ok else 1

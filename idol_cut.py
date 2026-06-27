@@ -91,6 +91,45 @@ def _resolve_watermark(watermark_png, no_watermark, lossless, gui):
     return str(wm_path) if wm_path else None
 
 
+def _resolve_endscreen(endscreen_path, no_endscreen, has_full_output, gui):
+    """Returns the endscreen file path or None. Pops a picker only for full outputs."""
+    if no_endscreen:
+        return None
+    if endscreen_path:
+        return endscreen_path
+    if not has_full_output:
+        return None
+    SCREEN_EXTS = VIDEO_EXTS + ["jpg", "jpeg", "png", "gif"]
+    es = pick.choose_file("เลือก endscreen (วิดีโอหรือรูป) — Cancel = ไม่ใส่",
+                          SCREEN_EXTS, allow_skip=True, gui=gui)
+    console.print(f"  → endscreen: [cyan]{es or 'ไม่ใส่'}[/cyan]")
+    return str(es) if es else None
+
+
+def _append_endscreen(full_path: Path, endscreen_src: str, opts: rnd.RenderOptions,
+                       duration: float) -> None:
+    """Render the endscreen clip and append it to full_path in-place."""
+    info = media.probe(str(full_path))
+    w, h = info.width or 1920, info.height or 1080
+
+    es_tmp = full_path.parent / "_es_tmp.mp4"
+    full_tmp = full_path.parent / "_full_tmp.mp4"
+    try:
+        with _progress() as prog:
+            task = prog.add_task("  endscreen", total=1.0)
+            rnd.render_endscreen(
+                endscreen_src, opts, str(es_tmp), width=w, height=h, duration=duration,
+                begin=lambda t: prog.update(task, total=t, completed=0.0),
+                tick=lambda d: prog.update(task, completed=d),
+            )
+        full_path.rename(full_tmp)
+        rnd.combine_clips([str(full_tmp), str(es_tmp)], str(full_path), opts)
+        console.print(f"  [green]✓ endscreen[/green]")
+    finally:
+        full_tmp.unlink(missing_ok=True)
+        es_tmp.unlink(missing_ok=True)
+
+
 def _resolve_out_dir(out_dir, master_wav, gui):
     if out_dir:
         return out_dir
@@ -266,6 +305,11 @@ def detect(wav_path, out, min_song, merge_gap, pulse_thresh, energy_floor, featu
 @click.option("--full", "do_full", is_flag=True, help="สร้าง full_show.mp4 (ทั้งโชว์รวม MC, ไม่ตัด)")
 @click.option("--full-start", default=None, help="ตัดหัว full show (timecode เช่น 0:30 หรือ 90)")
 @click.option("--full-end", default=None, help="ตัดท้าย full show (timecode เช่น 1:45:00)")
+@click.option("--endscreen", "endscreen_path", default=None,
+              help="ไฟล์ endscreen (วิดีโอหรือรูป PNG/JPG) ต่อท้าย full_show + full_performance")
+@click.option("--no-endscreen", is_flag=True, help="ไม่ใส่ endscreen (ไม่ต้องถาม)")
+@click.option("--endscreen-duration", default=10.0, show_default=True,
+              help="ระยะเวลา endscreen วินาที (ใช้สำหรับไฟล์รูป)")
 @click.option("--lossless", is_flag=True, help="Stream-copy video (ไม่ encode, ไม่ลายน้ำ) สำหรับเอาไป grade")
 @click.option("--no-refine", is_flag=True, help="ใช้ offset เดียว (ข้าม per-song drift correction)")
 @click.option("--cache-local", is_flag=True, help="Copy sources off the card to local scratch first")
@@ -273,6 +317,7 @@ def detect(wav_path, out, min_song, merge_gap, pulse_thresh, energy_floor, featu
 def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, watermark_png,
            no_watermark, wm_mode, wm_position, wm_scale, wm_opacity, encoder, quality,
            fade, no_fade, fade_color, combine, do_full, full_start, full_end,
+           endscreen_path, no_endscreen, endscreen_duration,
            lossless, no_refine, cache_local, no_gui):
     """Cut one synced (+ watermarked) clip per song, routing songs to covering clips."""
     gui = not no_gui
@@ -314,6 +359,9 @@ def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, wa
         console.print("[yellow]⚠ --lossless ใส่ลายน้ำไม่ได้ (ต้อง re-encode) — ข้ามลายน้ำ[/yellow]")
         watermark_png = None
     out_dir = _resolve_out_dir(out_dir, master_wav, gui)
+
+    endscreen_path = _resolve_endscreen(
+        endscreen_path, no_endscreen, has_full_output=do_full or combine, gui=gui)
 
     eff_fade = 0.0 if no_fade else (fade if fade is not None else (1.5 if combine else 1.0))
     opts = rnd.RenderOptions(
@@ -380,6 +428,9 @@ def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, wa
                     console.print(f"[bold green]✓ full performance[/bold green] → {full_perf}")
                 except RuntimeError as e:
                     console.print(f"[red]✗ combine fail: {e}[/red]")
+                else:
+                    if endscreen_path and full_perf.exists():
+                        _append_endscreen(full_perf, endscreen_path, opts, endscreen_duration)
 
     # full show (overall mode) — entrance to exit, MC included
     if do_full:
@@ -401,6 +452,8 @@ def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, wa
                     tick=lambda d: prog.update(task, completed=d),
                 )
                 console.print(f"[bold green]✓ full show[/bold green] → {full_show}")
+                if endscreen_path and full_show.exists():
+                    _append_endscreen(full_show, endscreen_path, opts, endscreen_duration)
             except (RuntimeError, ValueError) as e:
                 console.print(f"[red]✗ full show: {e}[/red]")
 
@@ -419,12 +472,16 @@ def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, wa
 @click.option("--full", "do_full", is_flag=True, help="สร้าง full_show.mp4 ด้วย")
 @click.option("--full-start", default=None, help="ตัดหัว full show (timecode)")
 @click.option("--full-end", default=None, help="ตัดท้าย full show (timecode)")
+@click.option("--endscreen", "endscreen_path", default=None, help="ไฟล์ endscreen")
+@click.option("--no-endscreen", is_flag=True, help="ไม่ใส่ endscreen")
+@click.option("--endscreen-duration", default=10.0, show_default=True)
 @click.option("--prefix", default="")
 @click.option("--yes", is_flag=True, help="Skip the review pause and render immediately")
 @click.option("--no-gui", is_flag=True, help="ใช้เมนูใน terminal แทน dialog ของ Mac")
 @click.pass_context
 def auto(ctx, mode, mov_paths, wav_path, out_dir, watermark_png, no_watermark,
-         combine, do_full, full_start, full_end, prefix, yes, no_gui):
+         combine, do_full, full_start, full_end, endscreen_path, no_endscreen,
+         endscreen_duration, prefix, yes, no_gui):
     """sync → detect → (review) → render, in one command."""
     gui = not no_gui
     mov_paths = _resolve_videos(mov_paths, gui)
@@ -462,6 +519,8 @@ def auto(ctx, mode, mov_paths, wav_path, out_dir, watermark_png, no_watermark,
                encoder="hardware", quality=62, fade=None, no_fade=False,
                fade_color="black", combine=combine, do_full=do_full,
                full_start=full_start, full_end=full_end,
+               endscreen_path=endscreen_path, no_endscreen=no_endscreen,
+               endscreen_duration=endscreen_duration,
                lossless=False, no_refine=False, cache_local=False, no_gui=no_gui)
 
 

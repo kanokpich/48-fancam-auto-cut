@@ -191,6 +191,24 @@ Uniform clips are stream-copied (instant).
 
 Or use `--combine` as a standalone flag without `--mode`.
 
+### Endscreen
+
+Append a branded endscreen to `full_show.mp4` and `full_performance.mp4`. Works with both images (PNG/JPG → looped as video) and video clips:
+
+```bash
+# pick interactively when asked
+python idol_cut.py render --mode overall --songs songs.json --mov cam.mov --wav show.wav -o out
+# -> dialog: "เลือก endscreen" (Cancel = ไม่ใส่)
+
+# or pass it directly
+python idol_cut.py render --mode overall --endscreen endscreen.png --endscreen-duration 8 ...
+
+# skip without being asked
+python idol_cut.py render --mode focus --no-endscreen ...
+```
+
+The endscreen fades in from `--fade-color` (default black), continuing the tail-fade of the last clip seamlessly. Image endscreens default to 10 s; override with `--endscreen-duration`.
+
 ### One-shot
 
 ```bash

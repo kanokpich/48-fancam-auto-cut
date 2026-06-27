@@ -38,7 +38,7 @@ Status legend: ✅ done · 🟡 partial · ⬜ not started
 
 ---
 
-## Phase 2 — Delivered (shooting modes)
+## Phase 2 — Delivered (shooting modes + endscreen)
 
 | # | Requirement | Status | Where |
 |---|-------------|--------|-------|
@@ -49,6 +49,8 @@ Status legend: ✅ done · 🟡 partial · ⬜ not started
 | P2-5 | Trim full show: `--full-start` / `--full-end` (timecode) | ✅ | `idol_cut.py` |
 | P2-6 | Fade sides per segment: entrance/exit dip, seam joins invisible | ✅ | `render.py` |
 | P2-7 | `full_show.mp4` > `full_performance.mp4` (MC gap present) — tested | ✅ | `test_pipeline.py` |
+| P2-8 | **Endscreen** — append image/video endscreen to `full_show` + `full_performance` | ✅ | `render.py`, `idol_cut.py` |
+| P2-9 | `--endscreen` file picker (Cancel = ไม่ใส่), `--no-endscreen`, `--endscreen-duration` | ✅ | `idol_cut.py` |
 
 ### Workflow & UX
 | # | Requirement | Status | Where |
