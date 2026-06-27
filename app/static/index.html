@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>auto-cut</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header>
+  <h1>✂ auto-cut</h1>
+  <nav>
+    <button class="nav-btn active" data-sec="sources">1 · Sources</button>
+    <button class="nav-btn" data-sec="sync">2 · Sync</button>
+    <button class="nav-btn" data-sec="songs">3 · Songs</button>
+    <button class="nav-btn" data-sec="render">4 · Render</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ══ SOURCES ══ -->
+  <section id="s-sources" class="section active">
+    <div class="card">
+      <h2>Video clips (.mov)</h2>
+      <div id="vol-list" class="vol-list"></div>
+      <div id="mov-browser" class="file-browser hidden"></div>
+      <div id="mov-crumb" class="hint hidden" style="margin-bottom:6px"></div>
+      <div id="selected-movs" class="selected-list"></div>
+    </div>
+
+    <div class="card">
+      <h2>Master audio (.wav)</h2>
+      <div class="row">
+        <span id="wav-display" class="path-display">(ยังไม่ได้เลือก)</span>
+        <button id="btn-pick-wav" class="btn btn-sm">เลือก WAV</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Output folder</h2>
+      <div class="row">
+        <input id="out-dir" type="text" class="path-input" placeholder="/Users/.../output/show">
+        <button id="btn-default-out" class="btn btn-sm">Auto</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btn-go-sync" class="btn btn-primary btn-lg">ถัดไป: Sync →</button>
+      <span id="sources-err" class="hint" style="color:var(--error)"></span>
+    </div>
+  </section>
+
+  <!-- ══ SYNC ══ -->
+  <section id="s-sync" class="section">
+    <div class="card">
+      <h2>Sync clips to master WAV</h2>
+      <div id="sync-clips" class="clip-list"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="btn-run-sync" class="btn btn-primary">▶ Run Sync</button>
+        <span class="hint">หรือโหลด sync.json ที่มีอยู่:</span>
+        <input id="sync-json-path" type="text" class="path-input" placeholder="path/to/sync.json">
+        <button id="btn-load-sync" class="btn btn-sm">Load</button>
+      </div>
+      <div id="sync-status" class="hint" style="margin-top:6px"></div>
+    </div>
+
+    <div class="row">
+      <button id="btn-go-songs" class="btn btn-primary btn-lg">ถัดไป: Songs →</button>
+    </div>
+  </section>
+
+  <!-- ══ SONGS ══ -->
+  <section id="s-songs" class="section">
+    <div class="card">
+      <h2>Song editor</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button id="btn-detect" class="btn btn-primary">✦ Auto-detect</button>
+        <span class="hint">หรือโหลด songs.json:</span>
+        <input id="songs-json-path" type="text" class="path-input" placeholder="path/to/songs.json">
+        <button id="btn-load-songs" class="btn btn-sm">Load</button>
+      </div>
+      <div id="detect-status" class="hint" style="margin-bottom:8px"></div>
+
+      <div id="waveform-container">
+        <canvas id="waveform-canvas"></canvas>
+        <div id="regions-layer"></div>
+      </div>
+
+      <div style="overflow-x:auto">
+        <table id="song-table">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th>Label</th>
+              <th>Start</th>
+              <th>End</th>
+              <th>Duration</th>
+              <th style="width:30px"></th>
+            </tr>
+          </thead>
+          <tbody id="song-tbody"></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btn-add-song" class="btn btn-sm">+ Add song</button>
+      </div>
+
+      <div class="divider" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-save-songs" class="btn btn-primary">💾 Save songs.json</button>
+        <input id="songs-save-path" type="text" class="path-input" placeholder="path/to/songs.json">
+        <span id="songs-save-status" class="hint"></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <button id="btn-go-render" class="btn btn-primary btn-lg">ถัดไป: Render →</button>
+    </div>
+  </section>
+
+  <!-- ══ RENDER ══ -->
+  <section id="s-render" class="section">
+    <div class="card">
+      <h2>Render options</h2>
+      <div class="form-grid">
+        <label>Mode</label>
+        <select id="r-mode">
+          <option value="songs">songs — per-song clips only</option>
+          <option value="focus">focus — songs + full_performance.mp4</option>
+          <option value="overall">overall — songs + full_show.mp4 (MC included)</option>
+        </select>
+
+        <label>Encoder</label>
+        <select id="r-encoder">
+          <option value="hardware">Hardware — VideoToolbox (~5× faster)</option>
+          <option value="software">Software — libx264 (smaller file)</option>
+        </select>
+
+        <label>Watermark</label>
+        <div class="row">
+          <span id="wm-display" class="path-display">(ไม่ใส่)</span>
+          <button id="btn-pick-wm" class="btn btn-sm">เลือก</button>
+          <button id="btn-no-wm" class="btn btn-sm btn-danger">ลบ</button>
+        </div>
+
+        <label>Fade (วินาที)</label>
+        <div class="row">
+          <input id="r-fade" type="number" value="1.0" min="0" max="5" step="0.1" style="width:70px">
+          <label class="hint" style="margin:0">
+            <input id="r-no-fade" type="checkbox"> ปิด fade
+          </label>
+        </div>
+
+        <label>Fade color</label>
+        <input id="r-fade-color" type="text" value="black" style="width:130px">
+
+        <label>Endscreen</label>
+        <div class="row">
+          <span id="es-display" class="path-display">(ไม่ใส่)</span>
+          <button id="btn-pick-es" class="btn btn-sm">เลือก</button>
+          <button id="btn-no-es" class="btn btn-sm btn-danger">ลบ</button>
+          <input id="es-dur" type="number" value="10" min="1" max="60" style="width:55px">
+          <span class="hint">วิ</span>
+        </div>
+
+        <label>Full start</label>
+        <input id="r-full-start" type="text" placeholder="เช่น 0:30 (overall เท่านั้น)" style="width:200px">
+
+        <label>Full end</label>
+        <input id="r-full-end" type="text" placeholder="เช่น 1:45:00" style="width:200px">
+
+        <label>Prefix</label>
+        <input id="r-prefix" type="text" placeholder="เช่น 2026-06-27_" style="width:200px">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Progress</h2>
+      <div id="render-progress" class="progress-section"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="btn-start-render" class="btn btn-primary btn-lg">▶ Start Render</button>
+        <span id="render-status-text" class="hint"></span>
+      </div>
+    </div>
+
+    <div id="render-results" class="card hidden">
+      <h2>Output files</h2>
+      <div id="render-output-list"></div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ══ File Picker Modal ══ -->
+<div id="picker-modal" class="modal">
+  <div class="modal-backdrop" id="modal-backdrop"></div>
+  <div class="modal-box">
+    <div class="modal-header">
+      <span id="modal-title">เลือกไฟล์</span>
+      <button id="modal-close" class="btn btn-sm">✕</button>
+    </div>
+    <div class="modal-crumb" id="modal-crumb"></div>
+    <div class="modal-list" id="modal-list"></div>
+    <div class="modal-footer">
+      <span class="modal-footer-hint" id="modal-hint"></span>
+      <button id="modal-cancel" class="btn btn-sm">ยกเลิก</button>
+      <button id="modal-ok" class="btn btn-primary btn-sm">เลือก</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
