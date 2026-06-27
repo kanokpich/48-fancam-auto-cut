@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+output/
+samples/
+*.mp4
+*.mov
+*.edl
+*.json
+venv/
+.venv/
