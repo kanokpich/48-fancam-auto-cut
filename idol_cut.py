@@ -239,6 +239,9 @@ def detect(wav_path, out, min_song, merge_gap, pulse_thresh, energy_floor, featu
 # ── render ───────────────────────────────────────────────────────────────────
 
 @cli.command()
+@click.option("--mode", type=click.Choice(["songs", "overall", "focus"]), default="songs",
+              show_default=True,
+              help="overall=per-song+full_show (MC included); focus=per-song+full_performance (songs only); songs=per-song only")
 @click.option("--sync", "sync_path", default=None, help="sync.json จากคำสั่ง sync (งานหลายกล้อง)")
 @click.option("--mov", "mov_paths", multiple=True, help="วิดีโอ (หลายไฟล์ได้; ไม่ใส่และไม่มี --sync = เลือกตอนรัน)")
 @click.option("--wav", "wav_path", default=None, help="External recorder .wav (ถ้าไม่ใช้ --sync)")
@@ -260,16 +263,23 @@ def detect(wav_path, out, min_song, merge_gap, pulse_thresh, energy_floor, featu
 @click.option("--no-fade", is_flag=True, help="ไม่ใส่ fade")
 @click.option("--fade-color", default="black", show_default=True, help="สีที่ fade ไปหา (black/white/0xRRGGBB)")
 @click.option("--combine", is_flag=True, help="รวมทุกเพลงต่อกันเป็น full_performance.mp4 (dip-to-color ระหว่างเพลง)")
+@click.option("--full", "do_full", is_flag=True, help="สร้าง full_show.mp4 (ทั้งโชว์รวม MC, ไม่ตัด)")
+@click.option("--full-start", default=None, help="ตัดหัว full show (timecode เช่น 0:30 หรือ 90)")
+@click.option("--full-end", default=None, help="ตัดท้าย full show (timecode เช่น 1:45:00)")
 @click.option("--lossless", is_flag=True, help="Stream-copy video (ไม่ encode, ไม่ลายน้ำ) สำหรับเอาไป grade")
 @click.option("--no-refine", is_flag=True, help="ใช้ offset เดียว (ข้าม per-song drift correction)")
 @click.option("--cache-local", is_flag=True, help="Copy sources off the card to local scratch first")
 @click.option("--no-gui", is_flag=True, help="ใช้เมนูใน terminal แทน dialog ของ Mac")
-def render(sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, watermark_png,
+def render(mode, sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, watermark_png,
            no_watermark, wm_mode, wm_position, wm_scale, wm_opacity, encoder, quality,
-           fade, no_fade, fade_color, combine, lossless, no_refine, cache_local, no_gui):
+           fade, no_fade, fade_color, combine, do_full, full_start, full_end,
+           lossless, no_refine, cache_local, no_gui):
     """Cut one synced (+ watermarked) clip per song, routing songs to covering clips."""
     gui = not no_gui
     SCRATCH.mkdir(parents=True, exist_ok=True)
+    # resolve mode preset (OR-in explicit flags so --full / --combine still work standalone)
+    do_full = do_full or mode == "overall"
+    combine = combine or mode == "focus"
 
     # 1) clips + master wav (from a saved sync map, or build one now)
     if sync_path:
@@ -352,40 +362,69 @@ def render(sync_path, mov_paths, wav_path, songs_path, out_dir, prefix, watermar
     if ok < len(manifest):
         console.print("[yellow]บางเพลง fail — ดู manifest.json[/yellow]")
 
-    # combined "full performance" video
+    # combined "full performance" video (focus mode)
     if combine:
         outputs = [m["output"] for m in manifest if m["status"] == "ok"]
         if len(outputs) < 2:
             console.print("[yellow]⚠ --combine ต้องมีอย่างน้อย 2 เพลงที่ render สำเร็จ — ข้าม[/yellow]")
         else:
-            full = Path(out_dir) / f"{prefix}full_performance.{opts.container}"
-            console.print(f"[cyan]รวม {len(outputs)} เพลง → {full.name}[/cyan]")
+            full_perf = Path(out_dir) / f"{prefix}full_performance.{opts.container}"
+            console.print(f"[cyan]รวม {len(outputs)} เพลง → {full_perf.name}[/cyan]")
             with _progress() as prog:
                 task = prog.add_task("  full_performance", total=1.0)
                 try:
                     rnd.combine_clips(
-                        outputs, str(full), opts,
+                        outputs, str(full_perf), opts,
                         begin=lambda total: prog.update(task, total=total, completed=0.0),
                         tick=lambda d: prog.update(task, completed=d))
-                    console.print(f"[bold green]✓ full performance[/bold green] → {full}")
+                    console.print(f"[bold green]✓ full performance[/bold green] → {full_perf}")
                 except RuntimeError as e:
                     console.print(f"[red]✗ combine fail: {e}[/red]")
+
+    # full show (overall mode) — entrance to exit, MC included
+    if do_full:
+        full_show = Path(out_dir) / f"{prefix}full_show.{opts.container}"
+        full_start_t = ss.parse_time(full_start) if full_start else None
+        full_end_t = ss.parse_time(full_end) if full_end else None
+        trim_note = ""
+        if full_start_t is not None or full_end_t is not None:
+            trim_note = f" [{_fmt(full_start_t or 0)}–{_fmt(full_end_t or 0)}]"
+        console.print(f"[cyan]สร้าง full show{trim_note} → {full_show.name}[/cyan]")
+        with _progress() as prog:
+            task = prog.add_task("  full_show", total=1.0)
+            try:
+                rnd.render_full(
+                    clips, master_wav, opts,
+                    start=full_start_t, end=full_end_t,
+                    label="full_show",
+                    begin=lambda total: prog.update(task, total=total, completed=0.0),
+                    tick=lambda d: prog.update(task, completed=d),
+                )
+                console.print(f"[bold green]✓ full show[/bold green] → {full_show}")
+            except (RuntimeError, ValueError) as e:
+                console.print(f"[red]✗ full show: {e}[/red]")
 
 
 # ── auto ─────────────────────────────────────────────────────────────────────
 
 @cli.command()
+@click.option("--mode", type=click.Choice(["songs", "overall", "focus"]), default="songs",
+              show_default=True, help="overall=full_show; focus=full_performance; songs=per-song only")
 @click.option("--mov", "mov_paths", multiple=True, help="วิดีโอ (หลายไฟล์ได้; ไม่ใส่ = เลือกตอนรัน)")
 @click.option("--wav", "wav_path", default=None, help="External recorder .wav")
 @click.option("-o", "--out", "out_dir", default=None, help="Output dir (ไม่ใส่ = output/<ชื่อ wav>)")
 @click.option("--watermark", "watermark_png", default=None, help="PNG watermark (ไม่ใส่ = เลือกตอนรัน)")
 @click.option("--no-watermark", is_flag=True, help="ไม่ใส่ลายน้ำ (ไม่ต้องถาม)")
 @click.option("--combine", is_flag=True, help="รวมทุกเพลงเป็น full_performance.mp4 ด้วย")
+@click.option("--full", "do_full", is_flag=True, help="สร้าง full_show.mp4 ด้วย")
+@click.option("--full-start", default=None, help="ตัดหัว full show (timecode)")
+@click.option("--full-end", default=None, help="ตัดท้าย full show (timecode)")
 @click.option("--prefix", default="")
 @click.option("--yes", is_flag=True, help="Skip the review pause and render immediately")
 @click.option("--no-gui", is_flag=True, help="ใช้เมนูใน terminal แทน dialog ของ Mac")
 @click.pass_context
-def auto(ctx, mov_paths, wav_path, out_dir, watermark_png, no_watermark, combine, prefix, yes, no_gui):
+def auto(ctx, mode, mov_paths, wav_path, out_dir, watermark_png, no_watermark,
+         combine, do_full, full_start, full_end, prefix, yes, no_gui):
     """sync → detect → (review) → render, in one command."""
     gui = not no_gui
     mov_paths = _resolve_videos(mov_paths, gui)
@@ -416,12 +455,13 @@ def auto(ctx, mov_paths, wav_path, out_dir, watermark_png, no_watermark, combine
         )
         return
 
-    ctx.invoke(render, sync_path=None, mov_paths=tuple(mov_paths), wav_path=wav_path,
-               songs_path=songs_path, out_dir=out_dir, prefix=prefix,
+    ctx.invoke(render, mode=mode, sync_path=None, mov_paths=tuple(mov_paths),
+               wav_path=wav_path, songs_path=songs_path, out_dir=out_dir, prefix=prefix,
                watermark_png=watermark_png, no_watermark=no_watermark,
                wm_mode="auto", wm_position="br", wm_scale=0.12, wm_opacity=0.85,
                encoder="hardware", quality=62, fade=None, no_fade=False,
-               fade_color="black", combine=combine,
+               fade_color="black", combine=combine, do_full=do_full,
+               full_start=full_start, full_end=full_end,
                lossless=False, no_refine=False, cache_local=False, no_gui=no_gui)
 
 

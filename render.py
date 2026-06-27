@@ -14,8 +14,10 @@ Two output modes:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import librosa
@@ -64,12 +66,17 @@ def _video_flags(opts: RenderOptions, copy_ok: bool) -> list[str]:
 
 
 def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
-                opts: RenderOptions, begin=None, tick=None) -> Path:
+                opts: RenderOptions, begin=None, tick=None,
+                fade_sides: tuple[bool, bool] = (True, True)) -> Path:
     """
     Render one song from one clip. Returns the output path. Raises on failure.
 
     begin(total_seconds) : called once the output duration is known.
     tick(done_seconds)   : called repeatedly with encode progress (live ffmpeg).
+    fade_sides           : (fade_in, fade_out) — suppress either side independently.
+                           Default (True,True) applies both (per-song behavior).
+                           render_full passes (True,False)/(False,False)/(False,True)
+                           so only the show entrance and exit dip to color.
     """
     a, b = song.start, song.end
     # clamp the song to this clip's coverage (a song can spill past a clip edge)
@@ -91,9 +98,10 @@ def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
     out = out_dir / f"{stem}.{opts.container}"
 
     use_watermark = bool(opts.watermark_png) and opts.codec != "copy"
-    # fade in/out (head/tail dissolve) — only when re-encoding, clamped to half the clip
+
+    fin, fout = fade_sides
     eff_fade = 0.0
-    if opts.codec != "copy" and opts.fade > 0:
+    if opts.codec != "copy" and opts.fade > 0 and (fin or fout):
         eff_fade = min(opts.fade, max(0.0, duration / 2 - 0.05))
     use_filter = use_watermark or eff_fade > 0
     fade_out_st = max(0.0, duration - eff_fade)
@@ -124,9 +132,15 @@ def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
         f = f"{eff_fade:.3f}"
         st = f"{fade_out_st:.3f}"
         c = opts.fade_color
-        filter_parts.append(
-            f"[{vlabel}]fade=t=in:st=0:d={f}:color={c},fade=t=out:st={st}:d={f}:color={c}[v]")
-        filter_parts.append(f"[1:a]afade=t=in:st=0:d={f},afade=t=out:st={st}:d={f}[a]")
+        v_parts, a_parts = [], []
+        if fin:
+            v_parts.append(f"fade=t=in:st=0:d={f}:color={c}")
+            a_parts.append(f"afade=t=in:st=0:d={f}")
+        if fout:
+            v_parts.append(f"fade=t=out:st={st}:d={f}:color={c}")
+            a_parts.append(f"afade=t=out:st={st}:d={f}")
+        filter_parts.append(f"[{vlabel}]{','.join(v_parts)}[v]")
+        filter_parts.append(f"[1:a]{','.join(a_parts)}[a]")
         vmap, amap = "[v]", "[a]"
     else:
         vmap = "[v]" if use_watermark else "0:v"
@@ -138,7 +152,7 @@ def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
 
     cmd += ["-t", f"{duration:.3f}"]
     cmd += _video_flags(opts, copy_ok=not use_filter)
-    cmd += ["-c:a", "aac", "-b:a", opts.audio_bitrate]
+    cmd += ["-c:a", "aac", "-ar", "44100", "-b:a", opts.audio_bitrate]
     if opts.container == "mp4":
         cmd += ["-movflags", "+faststart"]
 
@@ -236,6 +250,128 @@ def _refine(clip: ClipSync, master, scratch_cache: dict, song: Song, sr: int):
                                         win=win, focus=(song.start, song.end))
     except Exception:
         return clip.offset
+
+
+def render_full(clips: list[ClipSync], master_wav_path: str, opts: RenderOptions,
+                *, start: float | None = None, end: float | None = None,
+                sr: int = 22050, label: str = "full_show",
+                begin=None, tick=None) -> Path:
+    """
+    Render the entire show (entrance → exit, MC included) as one continuous clip.
+
+    The span defaults to the union of all synced clips. Pass start/end (WAV seconds)
+    to trim. For overall mode this is the key difference from --combine: the MC
+    gaps between songs are KEPT, so the output is the full take not just the music.
+
+    Multi-file handling (4GB/30-min card splits or multi-camera): clips are stitched
+    greedily — at each step the clip reaching furthest is chosen. Same-codec stitches
+    are stream-copied (instant); mixed resolutions fall back to scale+re-encode.
+
+    Fade sides: only the true entrance (head of first segment) and exit (tail of last
+    segment) dip to color. Internal split seams have no fade, so the join is invisible.
+    """
+    if not clips:
+        raise ValueError(f"{label}: no clips provided")
+
+    wav_start_min = min(c.wav_start for c in clips)
+    wav_end_max = max(c.wav_end for c in clips)
+    span_start = max(0.0, start if start is not None else wav_start_min)
+    span_end = end if end is not None else wav_end_max
+    span_end = min(span_end, wav_end_max)
+
+    if span_end - span_start < 0.5:
+        raise ValueError(
+            f"{label}: requested span is too short ({span_end - span_start:.1f}s)")
+
+    # greedy stitch: at each cursor position pick the clip that covers it and reaches furthest
+    sorted_clips = sorted(clips, key=lambda c: c.wav_start)
+    segments: list[tuple[ClipSync, float, float]] = []
+    cursor = span_start
+
+    while cursor < span_end - 0.1:
+        covering = [c for c in sorted_clips
+                    if c.wav_start <= cursor + 0.5 and c.wav_end > cursor + 0.1]
+        if covering:
+            best = max(covering, key=lambda c: c.wav_end)
+            seg_end = min(best.wav_end, span_end)
+            segments.append((best, cursor, seg_end))
+            cursor = seg_end
+        else:
+            future = [c for c in sorted_clips if c.wav_start > cursor]
+            if not future:
+                break
+            nxt = min(future, key=lambda c: c.wav_start)
+            print(f"⚠  {label}: no camera coverage {cursor:.1f}s–{nxt.wav_start:.1f}s "
+                  f"— skipping gap", file=sys.stderr)
+            cursor = nxt.wav_start
+
+    if not segments:
+        raise ValueError(
+            f"{label}: no camera clips cover the requested span "
+            f"{span_start:.1f}s–{span_end:.1f}s")
+
+    out_dir = Path(opts.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{opts.prefix}{label}" if opts.prefix else label
+    out = out_dir / f"{stem}.{opts.container}"
+
+    total = sum(e - s for _, s, e in segments)
+    if begin:
+        begin(total)
+
+    n = len(segments)
+
+    if n == 1:
+        clip, seg_a, seg_b = segments[0]
+        seg_song = Song(1, seg_a, seg_b, stem)
+        cumul = [0.0]
+
+        def _tick1(done):
+            if tick:
+                tick(cumul[0] + done)
+
+        render_song(clip, master_wav_path, seg_song, clip.offset, opts,
+                    begin=None, tick=_tick1 if tick else None,
+                    fade_sides=(True, True))
+        return out
+
+    # multiple segments → render each to scratch subdir, then stitch
+    seg_dir = out_dir / f"_{label}_segs"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    seg_opts = replace(opts, out_dir=str(seg_dir), prefix="", per_song_refine=False)
+
+    seg_paths: list[str] = []
+    cumul_done = [0.0]
+
+    try:
+        for i, (clip, seg_a, seg_b) in enumerate(segments):
+            if i == 0:
+                fs: tuple[bool, bool] = (True, False)
+            elif i == n - 1:
+                fs = (False, True)
+            else:
+                fs = (False, False)
+
+            seg_label = f"seg{i + 1:02d}"
+            seg_song = Song(i + 1, seg_a, seg_b, seg_label)
+            base = cumul_done[0]
+            seg_dur = seg_b - seg_a
+
+            def _tick(done, _base=base):
+                if tick:
+                    tick(_base + done)
+
+            seg_out = render_song(clip, master_wav_path, seg_song, clip.offset, seg_opts,
+                                  begin=None, tick=_tick if tick else None,
+                                  fade_sides=fs)
+            seg_paths.append(str(seg_out))
+            cumul_done[0] += seg_dur
+
+        combine_clips(seg_paths, str(out), opts)
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
+
+    return out
 
 
 def combine_clips(clip_paths: list[str], out_path: str, opts: RenderOptions,

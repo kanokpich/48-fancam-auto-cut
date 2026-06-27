@@ -139,20 +139,57 @@ start/end abruptly. Tune with `--fade 0.5`, change the color with
 `--fade-color white` (any ffmpeg color / `0xRRGGBB`), or turn off with `--no-fade`.
 (Fades need re-encoding, so they're skipped in `--lossless` mode.)
 
-### Full performance (combine)
+### Two shooting modes
 
-Add `--combine` to also produce **`full_performance.mp4`** — every song clip joined
-in order into one video of the whole day. Because each clip fades to color at its
-edges, the joins read as a **dip-to-color** transition between songs (defaults to
-1.5 s when `--combine` is on; set `--fade`/`--fade-color` to taste). Uniform clips
-are stream-copied (instant); mixed-resolution multi-cam clips are scaled and
-re-encoded to match.
+Fancam teams shoot the same show two ways. Pass `--mode` to handle each:
+
+| Mode | Camera style | Extra output | Command |
+|------|-------------|--------------|---------|
+| **`overall`** | Wide, all members, rolls start→end incl. MC | `full_show.mp4` — whole take, nothing cut | `--mode overall` |
+| **`focus`** | One member, stops between songs | `full_performance.mp4` — songs only, joined | `--mode focus` |
+| **`songs`** (default) | Any | Per-song clips only | (omit `--mode`) |
+
+Both modes still produce individual per-song clips. The extra file is additional.
+
+#### overall → full_show.mp4
 
 ```bash
 python idol_cut.py render --sync sync.json --songs songs.json \
-  --watermark logo.png --combine -o output/show
-# -> output/show/song01.mp4 ... + output/show/full_performance.mp4
+  --watermark logo.png --mode overall -o output/overall
+# -> output/overall/song01.mp4 ... + output/overall/full_show.mp4
 ```
+
+`full_show.mp4` is the **whole take**: entrance → songs → MC → songs → exit.
+Nothing is cut. The MC gaps are preserved.
+
+Trim the head/tail (e.g. cut your pre-show chat off the top):
+```bash
+--full-start 0:30   --full-end 1:45:00   # timecode or raw seconds
+```
+
+Or use `--full` as a standalone flag without `--mode`.
+
+**Multi-file (4GB/30-min card splits):** pass multiple `--mov` files to `sync`.
+`render_full` stitches them greedily — at each point it picks the clip reaching
+furthest, producing a seamless show. Splits inside the same camera are stream-
+copied (instant); different cameras are scaled if resolutions differ.
+
+Fades: only the **true entrance and exit** dip to color. Internal stitch seams
+have no fade, so card-split joins are invisible.
+
+#### focus → full_performance.mp4
+
+```bash
+python idol_cut.py render --sync sync.json --songs songs.json \
+  --watermark logo.png --mode focus -o output/focus
+# -> output/focus/song01.mp4 ... + output/focus/full_performance.mp4
+```
+
+`full_performance.mp4` is every song **joined in order** — MC gaps dropped, dip-
+to-color transitions between songs (fade defaults to 1.5 s with `--mode focus`).
+Uniform clips are stream-copied (instant).
+
+Or use `--combine` as a standalone flag without `--mode`.
 
 ### One-shot
 

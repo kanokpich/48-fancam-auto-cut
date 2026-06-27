@@ -6,6 +6,12 @@ Covers the full pipeline plus the three production fixes:
   - multi-clip sync map + song->clip routing (syncmap)
   - full-frame watermark auto-detection (watermark.resolve_mode)
   - hardware (VideoToolbox) AND software encoding paths
+
+Phase 2 additions:
+  - render_full: full_show includes MC gap (overall mode)
+  - render_full multi-file: two contiguous clips stitch into one
+  - render_full trim: --full-start/--full-end
+  - fade_sides: no color dip at internal stitch seams
 """
 
 import subprocess
@@ -25,8 +31,7 @@ SR = 22050
 TRUE_DELAY = 0.75  # camera starts 0.75 s before recorder -> offset L should be +0.75
 
 
-def _build_master(path: Path):
-    dur = 40.0
+def _build_master(path: Path, dur=40.0):
     n = int(dur * SR)
     t = np.arange(n) / SR
     y = 0.01 * np.random.standard_normal(n)
@@ -39,8 +44,23 @@ def _build_master(path: Path):
     return y
 
 
-def _build_mov(master, mov_path, scratch_wav, w=640, h=360):
-    d = int(TRUE_DELAY * SR)
+def _build_master_two_songs(path: Path, dur=46.0):
+    """master with song1 [4,14], quiet MC [14,28], song2 [28,40], then silence."""
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    y = 0.01 * np.random.standard_normal(n)
+    for s0, s1 in [(4, 14), (28, 40)]:
+        a, b = int(s0 * SR), int(s1 * SR)
+        y[a:b] += 0.25 * np.sin(2 * np.pi * 220 * t[a:b])
+        for i in range(a, b, SR // 2):
+            y[i:i + 400] += np.hanning(400) * 0.8
+    y /= np.max(np.abs(y))
+    sf.write(path, y, SR)
+    return y
+
+
+def _build_mov(master, mov_path, scratch_wav, w=640, h=360, delay=TRUE_DELAY):
+    d = int(delay * SR)
     scratch = np.zeros_like(master)
     scratch[d:] = master[:len(master) - d]
     scratch += 0.04 * np.random.standard_normal(len(master))
@@ -56,7 +76,6 @@ def _build_mov(master, mov_path, scratch_wav, w=640, h=360):
 
 
 def _build_fullframe_watermark(path: Path, w=640, h=360):
-    # a full-frame transparent canvas with a logo box in the corner
     subprocess.run([
         "ffmpeg", "-y", "-v", "error",
         "-f", "lavfi", "-i", f"color=c=black@0.0:size={w}x{h},format=rgba",
@@ -66,13 +85,28 @@ def _build_fullframe_watermark(path: Path, w=640, h=360):
     ], check=True)
 
 
+def _luma_at(video_path: str, seek: float, window: float = 0.5) -> float:
+    """Average luma (Y channel) over a short window, via rawvideo pipe."""
+    proc = subprocess.run([
+        "ffmpeg", "-v", "error",
+        "-ss", str(seek), "-t", str(window),
+        "-i", video_path,
+        "-vf", "scale=32:18,format=gray",
+        "-f", "rawvideo", "-pix_fmt", "gray", "-",
+    ], capture_output=True)
+    data = proc.stdout
+    if not data:
+        return 128.0
+    return float(np.frombuffer(data, np.uint8).mean())
+
+
 def _check(name, cond, detail=""):
     print(f"[{name}] {'PASS' if cond else 'FAIL'} {detail}")
     return cond
 
 
 def main() -> int:
-    np.random.seed(1234)  # deterministic synthetic audio -> deterministic detection
+    np.random.seed(1234)
     work = Path(tempfile.mkdtemp(prefix="idol_e2e_"))
     print(f"workdir: {work}")
     master_wav = work / "master.wav"
@@ -109,6 +143,7 @@ def main() -> int:
         ok &= _check("route", syncmap.best_clip(clips, songs[0]) is c, "song -> covering clip")
 
     # 4) render — hardware + software, both with full-frame watermark + live progress
+    hw_clip = None
     for enc in ("hardware", "software"):
         out_dir = work / f"out_{enc}"
         opts = rnd.RenderOptions(out_dir=str(out_dir), encoder=enc, preset="ultrafast",
@@ -135,9 +170,9 @@ def main() -> int:
 
     # 5) combine — concat two song clips into a full performance
     full = work / "full_performance.mp4"
-    opts = rnd.RenderOptions(out_dir=str(work))
+    opts_base = rnd.RenderOptions(out_dir=str(work))
     cticks = []
-    rnd.combine_clips([str(hw_clip), str(hw_clip)], str(full), opts,
+    rnd.combine_clips([str(hw_clip), str(hw_clip)], str(full), opts_base,
                       tick=cticks.append)
     if full.exists():
         fi = media.probe(full)
@@ -148,7 +183,115 @@ def main() -> int:
     else:
         ok &= _check("combine", False, "no full_performance output")
 
-    print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
+    # ── Phase 2 tests ────────────────────────────────────────────────────────
+    print()
+    print("=== Phase 2: overall / focus / full ===")
+    np.random.seed(5678)
+
+    # Build a show with two songs + MC gap
+    #   song1: WAV [4,14]   quiet MC: [14,28]   song2: [28,40]   total: 46s
+    p2_wav = work / "p2_master.wav"
+    p2_mov = work / "p2_show.mov"
+    p2_sc = work / "p2_scratch.wav"
+    p2_master = _build_master_two_songs(p2_wav, dur=46.0)
+    _build_mov(p2_master, p2_mov, p2_sc, delay=TRUE_DELAY)
+    p2_clips = syncmap.build_sync_map([str(p2_mov)], str(p2_wav), str(scratch_dir / "p2"))
+    p2_songs = [ss.Song(1, 4.0, 14.0, "song01"), ss.Song(2, 28.0, 40.0, "song02")]
+
+    # 6) focus combine: full_performance ≈ song1+song2 duration (MC excluded)
+    focus_dir = work / "focus"
+    focus_opts = rnd.RenderOptions(out_dir=str(focus_dir), encoder="software",
+                                   preset="ultrafast", fade=1.5)
+    focus_man = rnd.render_all(p2_clips, str(p2_wav), p2_songs, focus_opts)
+    focus_outs = [m["output"] for m in focus_man if m["status"] == "ok"]
+    fp_path = focus_dir / "full_performance.mp4"
+    rnd.combine_clips(focus_outs, str(fp_path), focus_opts)
+    if fp_path.exists():
+        fi = media.probe(fp_path)
+        song_dur = sum(s.duration for s in p2_songs)
+        ok &= _check("focus/combine",
+                     abs(fi.duration - song_dur) < 3.0,
+                     f"{fi.duration:.1f}s (songs only ≈{song_dur:.0f}s, MC excluded)")
+    else:
+        ok &= _check("focus/combine", False, "no full_performance")
+
+    # 7) overall full_show: full_show ≈ whole take (MC included) > combine
+    overall_dir = work / "overall"
+    overall_opts = rnd.RenderOptions(out_dir=str(overall_dir), encoder="software",
+                                     preset="ultrafast", fade=1.0)
+    fs_path = rnd.render_full(p2_clips, str(p2_wav), overall_opts, label="full_show")
+    if fs_path.exists():
+        fi_fs = media.probe(fs_path)
+        take_dur = p2_clips[0].wav_end - max(0.0, p2_clips[0].wav_start)
+        ok &= _check("overall/full",
+                     fi_fs.duration >= take_dur * 0.9,
+                     f"{fi_fs.duration:.1f}s (take≈{take_dur:.0f}s, MC included)")
+        if fp_path.exists():
+            ok &= _check("overall/full>combine",
+                         fi_fs.duration > media.probe(fp_path).duration + 5.0,
+                         "full_show longer than full_performance (MC gap counted)")
+    else:
+        ok &= _check("overall/full", False, "no full_show")
+
+    # 8) multi-file full: two synthetic ClipSync objects covering different WAV spans
+    #    → tests the multi-segment stitch code path without relying on sync accuracy
+    #    cam1: WAV [0,23s]  cam2: WAV [22,44s]  → together cover [0,44s] ≈ 44s
+    cam1_cs = syncmap.ClipSync(
+        path=str(p2_mov), offset=0.0, duration=23.0, confidence=0.9,
+        width=640, height=360, scratch_path="", label="cam1",
+    )
+    cam2_cs = syncmap.ClipSync(
+        path=str(p2_mov), offset=-22.0, duration=22.0, confidence=0.9,
+        width=640, height=360, scratch_path="", label="cam2",
+    )
+    multi_clips = [cam1_cs, cam2_cs]  # already sorted by wav_start (0, 22)
+    multi_dir = work / "multi"
+    multi_opts = rnd.RenderOptions(out_dir=str(multi_dir), encoder="software",
+                                   preset="ultrafast", fade=1.0, per_song_refine=False)
+    mf_path = rnd.render_full(multi_clips, str(p2_wav), multi_opts, label="full_show")
+    fi_mf = None
+    if mf_path.exists():
+        fi_mf = media.probe(mf_path)
+        ok &= _check("multi/full",
+                     fi_mf.duration >= 30.0,
+                     f"{fi_mf.duration:.1f}s (two synthetic clips, ≥30s)")
+    else:
+        ok &= _check("multi/full", False, "no multi full_show")
+
+    # 9) trim: --full-start/--full-end shrinks the output
+    trim_dir = work / "trim"
+    trim_opts = rnd.RenderOptions(out_dir=str(trim_dir), encoder="software",
+                                  preset="ultrafast", fade=1.0)
+    trim_start, trim_end = 5.0, 35.0
+    tr_path = rnd.render_full(p2_clips, str(p2_wav), trim_opts,
+                               start=trim_start, end=trim_end, label="full_show")
+    if tr_path.exists():
+        fi_tr = media.probe(tr_path)
+        expected = trim_end - trim_start
+        ok &= _check("trim/full",
+                     abs(fi_tr.duration - expected) < 2.0,
+                     f"{fi_tr.duration:.1f}s (expected ≈{expected:.0f}s)")
+    else:
+        ok &= _check("trim/full", False, "no trimmed full_show")
+
+    # 10) fade_sides: head is dark (fade-in), seam is bright (no dip at internal stitch)
+    if fi_mf and fi_mf.duration > 20.0:
+        # head: first 0.5s should be fading in from black → dark
+        luma_head = _luma_at(str(mf_path), seek=0.1, window=0.4)
+        # seam: middle of the stitched output → no fade applied → bright content
+        mid = fi_mf.duration / 2
+        luma_mid = _luma_at(str(mf_path), seek=mid - 0.3, window=0.6)
+        ok &= _check("fade_sides/head",
+                     luma_head < 50,
+                     f"head luma={luma_head:.1f} (expect dark — fading in from black)")
+        ok &= _check("fade_sides/seam",
+                     luma_mid > 60,
+                     f"seam luma={luma_mid:.1f} (expect bright — no fade at internal seam)")
+    else:
+        ok &= _check("fade_sides", False, "skip: no multi full_show to probe")
+
+    print()
+    print("RESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
     return 0 if ok else 1
 
 

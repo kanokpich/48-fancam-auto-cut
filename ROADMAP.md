@@ -36,6 +36,20 @@ Status legend: ✅ done · 🟡 partial · ⬜ not started
 | 11 | Output modes: deliverable (H.264) · software (x264) · lossless (copy) | ✅ | `render.py` |
 | 11a | **Combine** all songs → `full_performance.mp4` (dip-to-color joins) | ✅ | `render.py` |
 
+---
+
+## Phase 2 — Delivered (shooting modes)
+
+| # | Requirement | Status | Where |
+|---|-------------|--------|-------|
+| P2-1 | `--mode overall` — per-song + `full_show.mp4` (whole take, MC kept) | ✅ | `render.py`, `idol_cut.py` |
+| P2-2 | `--mode focus` — per-song + `full_performance.mp4` (songs only, joined) | ✅ | `render.py`, `idol_cut.py` |
+| P2-3 | `render_full`: entrance→exit, MC gaps included | ✅ | `render.py` |
+| P2-4 | Multi-file stitching (4GB/30-min card splits) — greedy coverage walk | ✅ | `render.py` |
+| P2-5 | Trim full show: `--full-start` / `--full-end` (timecode) | ✅ | `idol_cut.py` |
+| P2-6 | Fade sides per segment: entrance/exit dip, seam joins invisible | ✅ | `render.py` |
+| P2-7 | `full_show.mp4` > `full_performance.mp4` (MC gap present) — tested | ✅ | `test_pipeline.py` |
+
 ### Workflow & UX
 | # | Requirement | Status | Where |
 |---|-------------|--------|-------|
@@ -121,9 +135,9 @@ Key design rules that should survive into an app:
 
 ---
 
-## Phase 2+ — Roadmap toward an app
+## Phase 3+ — Roadmap toward an app
 
-### Phase 2 — Power features (still CLI/script)
+### Phase 3 — Power features (still CLI/script)
 - ⬜ **Splice a song across camera files** — concatenate the covering clips with a
   crossfade at the seam (handles camera stop mid-song).
 - ⬜ **Multi-aspect export presets** — one render → 16:9 (YouTube), 9:16 (Reels/
@@ -134,7 +148,7 @@ Key design rules that should survive into an app:
 - ⬜ **Batch queue** — multiple shows / cameras, background render, resume.
 - ⬜ **Title cards / lower-thirds** — song name + date intro per clip.
 
-### Phase 3 — App (no terminal)
+### Phase 4 — App (no terminal)
 - ⬜ **GUI** — Mac-native (SwiftUI) or Electron/Tauri wrapping the Python core
   (or a port). The CLI's callback seams (`render.py`) make this a thin layer.
 - ⬜ **Visual song editor** — waveform + thumbnails; drag song in/out points
@@ -144,15 +158,16 @@ Key design rules that should survive into an app:
 - ⬜ **One-click presets** — "037M2 YouTube", "037M2 Reels" bundling encoder +
   watermark + aspect + LUF + grade.
 
-### Phase 4 — Scale / polish
+### Phase 5 — Scale / polish
 - ⬜ ML music/speech segmentation (replace the energy+pulse heuristic).
 - ⬜ Cloud / remote render for long shows.
 - ⬜ Auto-upload (YouTube/Drive) with metadata from the setlist.
 
 ### Suggested next step
-**Phase 2 "multi-aspect export presets"** — highest leverage for posting to
-multiple platforms from one shoot, and reuses the existing render path (just adds
-a crop/scale stage + a preset table). Pairs naturally with loudness normalization.
+**Phase 3 "multi-aspect export presets"** — one render → 16:9 / 9:16 / 1:1 from
+the same show, reusing the existing render path with a crop/scale stage. Highest
+leverage for posting to multiple platforms (YouTube / Reels / IG Square) without
+re-shooting.
 
 ---
 
