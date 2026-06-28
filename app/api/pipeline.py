@@ -107,7 +107,8 @@ def _run_detect(job: _jobs.Job, req: DetectRequest) -> None:
         result = {
             "songs_json": songs_path,
             "songs": [
-                {"index": s.index, "start": s.start, "end": s.end, "label": s.label}
+                {"index": s.index, "start": s.start, "end": s.end,
+                 "label": s.label, "render_solo": s.render_solo}
                 for s in songs
             ],
         }
@@ -160,7 +161,8 @@ def waveform(wav: str, width: int = 2000):
 def read_songs(songs_json: str):
     songs = ss.read_songs(songs_json)
     return [
-        {"index": s.index, "start": s.start, "end": s.end, "label": s.label}
+        {"index": s.index, "start": s.start, "end": s.end,
+         "label": s.label, "render_solo": s.render_solo}
         for s in songs
     ]
 
@@ -170,6 +172,7 @@ class SongEntry(BaseModel):
     start: float
     end: float
     label: str
+    render_solo: bool = True
 
 
 class SaveSongsRequest(BaseModel):
@@ -179,6 +182,9 @@ class SaveSongsRequest(BaseModel):
 
 @router.put("/songs")
 def save_songs(req: SaveSongsRequest):
-    songs = [ss.Song(s.index, s.start, s.end, s.label) for s in req.songs]
+    songs = [
+        ss.Song(s.index, s.start, s.end, s.label, s.render_solo)
+        for s in req.songs
+    ]
     ss.write_songs(songs, req.songs_json)
     return {"saved": len(songs)}

@@ -265,12 +265,19 @@ main {
 .rhandle.right { right: 0; border-radius: 0 2px 2px 0; }
 .rhandle:hover { background: rgba(255,255,255,0.35); }
 
+/* ── Waveform controls ── */
+.wf-controls { padding: 5px 0 2px; gap: 10px; }
+#wf-play-btn { min-width: 34px; }
+#wf-time { min-width: 110px; font-size: 12px; }
+
 /* ── Song table ── */
 #song-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
+#song-table input[type="checkbox"] { cursor: pointer; accent-color: var(--accent); width: 14px; height: 14px; }
+
 #song-table th {
   text-align: left;
   padding: 4px 8px;

@@ -221,10 +221,65 @@ function initWaveform(canvas, regionsLayer, peaks, duration, songs, onSongsChang
     drawRegions();
   }
 
+  // ── Audio playback + playhead ──────────────────────────────────────────────
+  let _audio = null;
+  let _afId = null;
+  let _playhead = null;
+
+  function connectAudio(audioEl, controls) {
+    _audio = audioEl;
+
+    // playhead line (inside regions-layer)
+    _playhead = document.createElement("div");
+    _playhead.style.cssText =
+      "position:absolute;top:0;bottom:0;width:2px;background:rgba(255,255,255,0.85);" +
+      "pointer-events:none;z-index:20;display:none;box-shadow:0 0 4px rgba(255,255,255,0.5);";
+    regionsLayer.appendChild(_playhead);
+
+    function updatePlayhead() {
+      if (!_duration || !W || !_audio) return;
+      const x = (_audio.currentTime / _duration) * W;
+      _playhead.style.left = x + "px";
+      _playhead.style.display = "";
+      if (controls?.timeEl)
+        controls.timeEl.textContent = fmtTime(_audio.currentTime) + " / " + fmtTime(_duration);
+    }
+
+    function startAnim() {
+      cancelAnimationFrame(_afId);
+      function tick() { updatePlayhead(); _afId = requestAnimationFrame(tick); }
+      tick();
+    }
+
+    _audio.addEventListener("play", () => {
+      if (controls?.btn) controls.btn.textContent = "⏸";
+      startAnim();
+    });
+    _audio.addEventListener("pause", () => {
+      cancelAnimationFrame(_afId);
+      if (controls?.btn) controls.btn.textContent = "▶";
+      updatePlayhead();
+    });
+    _audio.addEventListener("ended", () => {
+      cancelAnimationFrame(_afId);
+      if (controls?.btn) controls.btn.textContent = "▶";
+    });
+    _audio.addEventListener("seeked", updatePlayhead);
+
+    // click on waveform to seek
+    regionsLayer.addEventListener("click", (e) => {
+      if (!_audio || !_duration) return;
+      if (e.target.classList.contains("rhandle")) return;
+      const rect = regionsLayer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      _audio.currentTime = Math.max(0, Math.min(_duration, (x / W) * _duration));
+    });
+  }
+
   // initial draw
   resize();
 
-  return { setSongs };
+  return { setSongs, connectAudio };
 }
 
 // ── Song table ──────────────────────────────────────────────────────────────
@@ -233,8 +288,10 @@ let _wf = null;
 function renderSongTable(songs, tbody, onUpdate) {
   tbody.innerHTML = "";
   songs.forEach((s, i) => {
+    const solo = s.render_solo !== false;
     const tr = document.createElement("tr");
     tr.innerHTML = `
+      <td><input type="checkbox" data-field="render_solo" data-i="${i}" ${solo ? "checked" : ""} title="render แยก"></td>
       <td style="color:var(--text-dim)">${s.index}</td>
       <td><input type="text" value="${s.label}" data-field="label" data-i="${i}"></td>
       <td><input type="text" value="${fmtTime(s.start)}" data-field="start" data-i="${i}" style="width:70px"></td>
@@ -245,18 +302,26 @@ function renderSongTable(songs, tbody, onUpdate) {
     tbody.appendChild(tr);
   });
 
-  tbody.querySelectorAll("input").forEach((inp) => {
+  tbody.querySelectorAll("input[type='text']").forEach((inp) => {
     inp.addEventListener("change", () => {
       const i = parseInt(inp.dataset.i);
       const field = inp.dataset.field;
       if (field === "start" || field === "end") {
         songs[i][field] = parseTime(inp.value);
-        // refresh duration cell
         const cells = tbody.querySelectorAll("tr")[i].querySelectorAll("td");
-        cells[4].textContent = fmtTime(songs[i].end - songs[i].start);
+        cells[5].textContent = fmtTime(songs[i].end - songs[i].start);
       } else {
         songs[i][field] = inp.value;
       }
+      onUpdate(songs);
+    });
+    // also save on Enter
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") inp.blur(); });
+  });
+
+  tbody.querySelectorAll("input[type='checkbox']").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      songs[parseInt(cb.dataset.i)].render_solo = cb.checked;
       onUpdate(songs);
     });
   });
@@ -518,11 +583,28 @@ function initSongs() {
   const regionsLayer = document.getElementById("regions-layer");
   const saveStatus = document.getElementById("songs-save-status");
   const savePathInput = document.getElementById("songs-save-path");
+  const playBtn = document.getElementById("wf-play-btn");
+  const timeEl = document.getElementById("wf-time");
+
+  // hidden audio element for waveform playback
+  const audio = document.createElement("audio");
+  audio.preload = "none";
+  document.body.appendChild(audio);
 
   function onSongsUpdate(songs) {
     S.songs = songs;
     if (_wf) _wf.setSongs(songs);
+    // auto-save so render always uses up-to-date labels/times
+    if (S.songsJsonPath) {
+      api("PUT", "/songs", { songs_json: S.songsJsonPath, songs: S.songs }).catch(() => {});
+    }
   }
+
+  playBtn?.addEventListener("click", () => {
+    if (!audio.src) return;
+    if (audio.paused) audio.play();
+    else audio.pause();
+  });
 
   async function loadWaveform() {
     if (!S.wavPath || !S.wavDuration) {
@@ -539,6 +621,11 @@ function initSongs() {
     }
     _wf = initWaveform(canvas, regionsLayer, S.wavPeaks, S.wavDuration, S.songs, onSongsUpdate);
     renderSongTable(S.songs, tbody, onSongsUpdate);
+
+    // connect audio playback
+    audio.src = `/api/file?path=${encodeURIComponent(S.wavPath)}`;
+    if (playBtn) playBtn.disabled = false;
+    _wf.connectAudio(audio, { btn: playBtn, timeEl });
   }
 
   document.getElementById("btn-detect").addEventListener("click", async () => {

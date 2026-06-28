@@ -32,6 +32,7 @@ class Song:
     start: float          # seconds, in WAV timeline
     end: float
     label: str = ""
+    render_solo: bool = True   # if False: skip individual clip; still included in full
 
     @property
     def duration(self) -> float:
@@ -199,7 +200,8 @@ def write_songs(songs: list[Song], path: str, meta: dict | None = None) -> None:
         "meta": meta or {},
         "songs": [
             {"index": s.index, "start": format_time(s.start),
-             "end": format_time(s.end), "label": s.label}
+             "end": format_time(s.end), "label": s.label,
+             "render_solo": s.render_solo}
             for s in songs
         ],
     }
@@ -215,5 +217,6 @@ def read_songs(path: str) -> list[Song]:
             start=parse_time(s["start"]),
             end=parse_time(s["end"]),
             label=s.get("label", f"song{len(songs) + 1:02d}"),
+            render_solo=bool(s.get("render_solo", True)),
         ))
     return songs

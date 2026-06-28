@@ -86,11 +86,17 @@
         <canvas id="waveform-canvas"></canvas>
         <div id="regions-layer"></div>
       </div>
+      <div class="row wf-controls">
+        <button id="wf-play-btn" class="btn btn-sm" disabled>▶</button>
+        <span id="wf-time" class="hint" style="font-family:monospace">0:00 / 0:00</span>
+        <span class="hint">คลิก waveform เพื่อ seek</span>
+      </div>
 
-      <div style="overflow-x:auto">
+      <div style="overflow-x:auto;margin-top:8px">
         <table id="song-table">
           <thead>
             <tr>
+              <th style="width:28px" title="render แยก">solo</th>
               <th style="width:30px">#</th>
               <th>Label</th>
               <th>Start</th>

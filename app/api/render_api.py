@@ -73,7 +73,7 @@ def _run_render(job: _jobs.Job, req: RenderRequest) -> None:
             wm_mode="auto",
         )
 
-        # per-song render
+        # per-song render (render ALL songs so focus/overall full clips work)
         job.push("phase", "songs")
         manifest = rnd.render_all(
             clips, master_wav, songs, opts,
@@ -84,7 +84,7 @@ def _run_render(job: _jobs.Job, req: RenderRequest) -> None:
             on_progress=lambda e: job.push("song_done", e),
         )
 
-        # focus mode — combine songs into full_performance
+        # focus mode — combine ALL songs into full_performance (regardless of render_solo)
         if do_combine:
             outputs = [m["output"] for m in manifest if m.get("status") == "ok"]
             if len(outputs) >= 2:
@@ -99,6 +99,12 @@ def _run_render(job: _jobs.Job, req: RenderRequest) -> None:
                     job.push("phase", "endscreen_performance")
                     _append_endscreen(full_perf, req.endscreen, opts,
                                       req.endscreen_duration, job)
+
+        # remove individual clip files for songs the user didn't want as solo exports
+        for entry, song in zip(manifest, songs):
+            if not song.render_solo and entry.get("status") == "ok":
+                Path(entry["output"]).unlink(missing_ok=True)
+                entry["status"] = "skipped"
 
         # overall mode — full show (MC included)
         if do_full:
