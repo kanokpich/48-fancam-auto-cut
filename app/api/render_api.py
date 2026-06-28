@@ -32,6 +32,8 @@ class RenderRequest(BaseModel):
     endscreen_duration: float = 10.0
     full_start: str | None = None
     full_end: str | None = None
+    per_song_refine: bool = False  # extra CPU; only useful when clip has slow drift
+    threads: int = 0               # 0 = let ffmpeg decide; >0 caps CPU thread count
 
 
 def _append_endscreen(full_path: Path, src: str, opts: rnd.RenderOptions,
@@ -71,6 +73,8 @@ def _run_render(job: _jobs.Job, req: RenderRequest) -> None:
             fade_color=req.fade_color,
             watermark_png=req.watermark or None,
             wm_mode="auto",
+            per_song_refine=req.per_song_refine,
+            threads=req.threads,
         )
 
         # per-song render (render ALL songs so focus/overall full clips work)

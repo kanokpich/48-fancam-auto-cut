@@ -813,6 +813,8 @@ function initRender() {
         endscreen_duration: parseFloat(document.getElementById("es-dur").value) || 10,
         full_start: document.getElementById("r-full-start").value.trim() || null,
         full_end: document.getElementById("r-full-end").value.trim() || null,
+        threads: parseInt(document.getElementById("r-threads").value) || 0,
+        per_song_refine: document.getElementById("r-refine").checked,
       };
 
       const { job_id } = await api("POST", "/render", body);

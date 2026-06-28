@@ -53,6 +53,8 @@ class RenderOptions:
     wm_height: int = 0
     # sync
     per_song_refine: bool = True
+    # cpu
+    threads: int = 0   # 0 = let ffmpeg decide; >0 limits decode/filter threads
 
 
 def _video_flags(opts: RenderOptions, copy_ok: bool) -> list[str]:
@@ -63,6 +65,11 @@ def _video_flags(opts: RenderOptions, copy_ok: bool) -> list[str]:
                 "-pix_fmt", "yuv420p", "-allow_sw", "1"]
     return ["-c:v", "libx264", "-crf", str(opts.crf),
             "-preset", opts.preset, "-pix_fmt", "yuv420p"]
+
+
+def _thread_flags(opts: RenderOptions) -> list[str]:
+    """Global thread limit — inserted before inputs so it affects decode + filter."""
+    return ["-threads", str(opts.threads)] if opts.threads > 0 else []
 
 
 def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
@@ -106,11 +113,14 @@ def render_song(clip: ClipSync, master_wav_path: str, song: Song, L: float,
     use_filter = use_watermark or eff_fade > 0
     fade_out_st = max(0.0, duration - eff_fade)
 
-    cmd = ["ffmpeg", "-y", "-v", "error"]
-    # hardware decode only when there's no CPU filtergraph (watermark/fade), else
-    # the frames would need an extra download off the GPU.
-    if opts.hw_decode and not use_filter and opts.codec != "copy":
-        cmd += ["-hwaccel", "videotoolbox"]
+    cmd = ["ffmpeg", "-y", "-v", "error"] + _thread_flags(opts)
+    if opts.hw_decode and opts.codec != "copy":
+        if use_filter:
+            # Decode via VideoToolbox to nv12 in CPU-accessible memory so the
+            # filter graph (overlay, fade) can process frames without a GPU download.
+            cmd += ["-hwaccel", "videotoolbox", "-hwaccel_output_format", "nv12"]
+        else:
+            cmd += ["-hwaccel", "videotoolbox"]
     cmd += ["-ss", f"{mov_start:.3f}", "-i", clip.path,
             "-ss", f"{a:.3f}", "-i", master_wav_path]
 
@@ -404,7 +414,7 @@ def render_endscreen(src_path: str, opts: RenderOptions, out_path: str,
     if begin:
         begin(clip_dur)
 
-    cmd = ["ffmpeg", "-y", "-v", "error"]
+    cmd = ["ffmpeg", "-y", "-v", "error"] + _thread_flags(opts)
     if is_image:
         cmd += ["-loop", "1", "-i", src_path,
                 "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
@@ -482,12 +492,13 @@ def combine_clips(clip_paths: list[str], out_path: str, opts: RenderOptions,
         # uniform -> concat demuxer, stream copy (no re-encode)
         listfile = out.parent / "_concat_list.txt"
         listfile.write_text("".join(f"file '{Path(p).resolve()}'\n" for p in clip_paths))
-        cmd = ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+        cmd = ["ffmpeg", "-y", "-v", "error"] + _thread_flags(opts) + [
+               "-f", "concat", "-safe", "0",
                "-i", str(listfile), "-c", "copy", "-movflags", "+faststart"]
     else:
         # mixed resolutions -> scale each to the first clip's frame, re-encode
         w, h = infos[0].width or 1920, infos[0].height or 1080
-        cmd = ["ffmpeg", "-y", "-v", "error"]
+        cmd = ["ffmpeg", "-y", "-v", "error"] + _thread_flags(opts)
         for p in clip_paths:
             cmd += ["-i", p]
         parts, concat_in = [], ""

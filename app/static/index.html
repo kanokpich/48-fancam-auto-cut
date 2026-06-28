@@ -178,6 +178,20 @@
 
         <label>Prefix</label>
         <input id="r-prefix" type="text" placeholder="เช่น 2026-06-27_" style="width:200px">
+
+        <label style="color:var(--text-dim);font-size:11px;padding-top:6px" colspan="2">CPU</label>
+        <div></div>
+
+        <label>CPU threads</label>
+        <div class="row">
+          <input id="r-threads" type="number" value="0" min="0" max="32" step="1" style="width:60px">
+          <span class="hint">0 = auto (ใช้ทุก core)  ลด เช่น 4 เพื่อประหยัด CPU</span>
+        </div>
+
+        <label>Per-song refine</label>
+        <label class="hint" style="margin:0">
+          <input id="r-refine" type="checkbox"> librosa drift refine ต่อเพลง (ใช้ CPU มาก, ปิดไว้ก็พอ)
+        </label>
       </div>
     </div>
 
