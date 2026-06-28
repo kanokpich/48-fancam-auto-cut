@@ -25,8 +25,6 @@
     <div class="card">
       <h2>Video clips (.mov)</h2>
       <div id="vol-list" class="vol-list"></div>
-      <div id="mov-browser" class="file-browser hidden"></div>
-      <div id="mov-crumb" class="hint hidden" style="margin-bottom:6px"></div>
       <div id="selected-movs" class="selected-list"></div>
     </div>
 
@@ -42,6 +40,7 @@
       <h2>Output folder</h2>
       <div class="row">
         <input id="out-dir" type="text" class="path-input" placeholder="/Users/.../output/show">
+        <button id="btn-pick-out" class="btn btn-sm">เลือก Folder</button>
         <button id="btn-default-out" class="btn btn-sm">Auto</button>
       </div>
     </div>
@@ -192,24 +191,6 @@
   </section>
 
 </main>
-
-<!-- ══ File Picker Modal ══ -->
-<div id="picker-modal" class="modal">
-  <div class="modal-backdrop" id="modal-backdrop"></div>
-  <div class="modal-box">
-    <div class="modal-header">
-      <span id="modal-title">เลือกไฟล์</span>
-      <button id="modal-close" class="btn btn-sm">✕</button>
-    </div>
-    <div class="modal-crumb" id="modal-crumb"></div>
-    <div class="modal-list" id="modal-list"></div>
-    <div class="modal-footer">
-      <span class="modal-footer-hint" id="modal-hint"></span>
-      <button id="modal-cancel" class="btn btn-sm">ยกเลิก</button>
-      <button id="modal-ok" class="btn btn-primary btn-sm">เลือก</button>
-    </div>
-  </div>
-</div>
 
 <script type="module" src="/app.js"></script>
 </body>

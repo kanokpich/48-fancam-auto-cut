@@ -78,126 +78,31 @@ function showSection(name) {
   document.querySelector(`.nav-btn[data-sec="${name}"]`)?.classList.add("active");
 }
 
-// ── File Picker Modal ──────────────────────────────────────────────────────
-const Modal = (() => {
-  const el = document.getElementById("picker-modal");
-  const titleEl = document.getElementById("modal-title");
-  const crumbEl = document.getElementById("modal-crumb");
-  const listEl = document.getElementById("modal-list");
-  const hintEl = document.getElementById("modal-hint");
-  const okBtn = document.getElementById("modal-ok");
-
-  let _multi = false;
-  let _kind = "all";
-  let _selected = new Set();
-  let _resolve = null;
-  let _currentPath = null;
-
-  async function browse(path) {
-    _currentPath = path;
-    crumbEl.textContent = path;
-    listEl.innerHTML = `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">⟳ กำลังโหลด...</div>`;
-    const items = await api("GET", `/browse?path=${encodeURIComponent(path)}&kind=${_kind}`);
-    renderList(items, path);
+// ── Native macOS picker — calls osascript via backend ─────────────────────
+const NativePick = (() => {
+  function qs(params) {
+    return Object.entries(params)
+      .filter(([, v]) => v != null && v !== "")
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
   }
 
-  function renderList(items, currentPath) {
-    listEl.innerHTML = "";
-
-    // back button
-    if (currentPath && currentPath !== "/Volumes") {
-      const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
-      const back = document.createElement("div");
-      back.className = "modal-item is-dir";
-      back.innerHTML = `<span style="width:16px">↩</span><span style="color:var(--text-dim)">.. (ย้อนกลับ)</span>`;
-      back.addEventListener("click", () => browse(parent));
-      listEl.appendChild(back);
-    }
-
-    const fileIcon = { video: "🎬", audio: "🎵", image: "🖼", all: "📄" }[_kind] || "📄";
-    items.forEach((item) => {
-      const div = document.createElement("div");
-      div.className = "modal-item" + (item.is_dir ? " is-dir" : "");
-      if (_selected.has(item.path)) div.classList.add("selected");
-      div.innerHTML = `
-        <span style="width:16px">${item.is_dir ? "📁" : fileIcon}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${item.name}</span>
-        ${!item.is_dir ? `<span class="modal-item-size">${fmtSize(item.size)}</span>` : ""}
-      `;
-      div.addEventListener("click", () => {
-        if (item.is_dir) {
-          browse(item.path);
-        } else {
-          if (_multi) {
-            if (_selected.has(item.path)) {
-              _selected.delete(item.path);
-              div.classList.remove("selected");
-            } else {
-              _selected.add(item.path);
-              div.classList.add("selected");
-            }
-            hintEl.textContent = `เลือกแล้ว ${_selected.size} ไฟล์`;
-          } else {
-            _selected.clear();
-            listEl.querySelectorAll(".selected").forEach((d) => d.classList.remove("selected"));
-            _selected.add(item.path);
-            div.classList.add("selected");
-            hintEl.textContent = item.name;
-          }
-        }
-      });
-      listEl.appendChild(div);
-    });
-
-    if (items.length === 0 && currentPath) {
-      listEl.innerHTML += `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">ไม่พบไฟล์ใน folder นี้</div>`;
-    }
+  async function file(prompt, location = "") {
+    const r = await api("GET", `/pick/file?${qs({ prompt, location })}`);
+    return r.cancelled ? null : r.path;
   }
 
-  function close() {
-    el.classList.remove("open");
-    _resolve?.(null);
-    _resolve = null;
+  async function files(prompt, location = "") {
+    const r = await api("GET", `/pick/files?${qs({ prompt, location })}`);
+    return r.cancelled ? [] : (r.paths || []);
   }
 
-  function confirm() {
-    const result = _multi ? [..._selected] : ([..._selected][0] ?? null);
-    el.classList.remove("open");
-    _resolve?.(result);
-    _resolve = null;
+  async function folder(prompt, location = "") {
+    const r = await api("GET", `/pick/folder?${qs({ prompt, location })}`);
+    return r.cancelled ? null : r.path;
   }
 
-  document.getElementById("modal-close").addEventListener("click", close);
-  document.getElementById("modal-cancel").addEventListener("click", close);
-  document.getElementById("modal-backdrop").addEventListener("click", close);
-  okBtn.addEventListener("click", confirm);
-
-  async function open({ title, kind = "all", multi = false }) {
-    _kind = kind;
-    _multi = multi;
-    _selected.clear();
-    _currentPath = null;
-    titleEl.textContent = title;
-    hintEl.textContent = multi ? "คลิกไฟล์เพื่อเลือก (หลายไฟล์ได้)" : "คลิกไฟล์เพื่อเลือก";
-    el.classList.add("open");
-
-    // show drives
-    listEl.innerHTML = `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">⟳ กำลังโหลด drives...</div>`;
-    crumbEl.textContent = "/ เลือก drive";
-    const vols = await api("GET", "/volumes");
-    listEl.innerHTML = "";
-    vols.forEach((v) => {
-      const div = document.createElement("div");
-      div.className = "modal-item is-dir";
-      div.innerHTML = `<span style="width:16px">💾</span><span>${v.name}</span><span class="modal-item-size">${v.path}</span>`;
-      div.addEventListener("click", () => browse(v.path));
-      listEl.appendChild(div);
-    });
-
-    return new Promise((res) => { _resolve = res; });
-  }
-
-  return { open, close };
+  return { file, files, folder };
 })();
 
 // ── Waveform canvas ─────────────────────────────────────────────────────────
@@ -447,83 +352,10 @@ function makeProgressSection(container) {
 // ── Sources section ─────────────────────────────────────────────────────────
 function initSources() {
   const volList = document.getElementById("vol-list");
-  const browser = document.getElementById("mov-browser");
-  const crumb = document.getElementById("mov-crumb");
   const selectedList = document.getElementById("selected-movs");
   const outDirInput = document.getElementById("out-dir");
   const wavDisplay = document.getElementById("wav-display");
   const errSpan = document.getElementById("sources-err");
-
-  let browserPath = null;
-
-  function renderVolumes() {
-    api("GET", "/volumes").then((vols) => {
-      volList.innerHTML = "";
-      vols.forEach((v) => {
-        const chip = document.createElement("div");
-        chip.className = "vol-chip";
-        chip.textContent = v.name;
-        chip.addEventListener("click", () => {
-          document.querySelectorAll(".vol-chip").forEach((c) => c.classList.remove("active"));
-          chip.classList.add("active");
-          loadBrowser(v.path, "video");
-        });
-        volList.appendChild(chip);
-      });
-    });
-  }
-
-  async function loadBrowser(path, kind) {
-    browserPath = path;
-    browser.classList.remove("hidden");
-    crumb.classList.remove("hidden");
-    crumb.textContent = "📁 " + path;
-    browser.innerHTML = "<div style='padding:8px 12px;color:var(--text-dim);font-size:12px'>⟳ กำลังโหลด...</div>";
-    browser.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    const items = await api("GET", `/browse?path=${encodeURIComponent(path)}&kind=${kind}`);
-    browser.innerHTML = "";
-
-    // back button when inside a subdirectory
-    const parent = path.split("/").slice(0, -1).join("/");
-    if (parent && parent !== "/" && path !== "/Volumes") {
-      const back = document.createElement("div");
-      back.className = "file-item is-dir";
-      back.innerHTML = `<span class="file-icon">↩</span><span style="color:var(--text-dim)">.. (ย้อนกลับ)</span>`;
-      back.addEventListener("click", () => loadBrowser(parent, kind));
-      browser.appendChild(back);
-    }
-
-    const ext = { video: "🎬", audio: "🎵", all: "📄" }[kind] || "📄";
-    items.forEach((item) => {
-      const div = document.createElement("div");
-      div.className = "file-item" + (item.is_dir ? " is-dir" : "");
-      if (!item.is_dir && S.movPaths.includes(item.path)) div.classList.add("selected");
-      div.innerHTML = `
-        <span class="file-icon">${item.is_dir ? "📁" : ext}</span>
-        <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${item.name}</span>
-        ${!item.is_dir ? `<span class="file-size">${fmtSize(item.size)}</span>` : ""}
-      `;
-      div.addEventListener("click", () => {
-        if (item.is_dir) {
-          loadBrowser(item.path, kind);
-        } else if (kind === "video") {
-          if (S.movPaths.includes(item.path)) {
-            S.movPaths = S.movPaths.filter((p) => p !== item.path);
-            div.classList.remove("selected");
-          } else {
-            S.movPaths.push(item.path);
-            div.classList.add("selected");
-          }
-          renderSelected();
-        }
-      });
-      browser.appendChild(div);
-    });
-
-    if (items.length === 0) {
-      browser.innerHTML += `<div style="padding:8px 12px;color:var(--text-dim);font-size:12px">ไม่พบไฟล์ใน folder นี้</div>`;
-    }
-  }
 
   function renderSelected() {
     selectedList.innerHTML = "";
@@ -535,18 +367,42 @@ function initSources() {
       chip.querySelector("button").addEventListener("click", () => {
         S.movPaths = S.movPaths.filter((x) => x !== p);
         renderSelected();
-        // uncheck in browser
-        browser.querySelectorAll(".file-item.selected").forEach((d) => {
-          if (d.querySelector("span:nth-child(2)")?.textContent === name)
-            d.classList.remove("selected");
-        });
       });
       selectedList.appendChild(chip);
     });
+    if (!S.movPaths.length) {
+      selectedList.innerHTML = `<span class="hint">ยังไม่ได้เลือกไฟล์</span>`;
+    }
   }
 
+  async function pickMOVs(location = "") {
+    const paths = await NativePick.files("เลือกไฟล์วิดีโอ (.mov / .mp4)", location);
+    if (!paths.length) return;
+    paths.forEach((p) => { if (!S.movPaths.includes(p)) S.movPaths.push(p); });
+    renderSelected();
+  }
+
+  // volume chips — click to open native picker starting from that drive
+  api("GET", "/volumes").then((vols) => {
+    volList.innerHTML = "";
+    vols.forEach((v) => {
+      const chip = document.createElement("div");
+      chip.className = "vol-chip";
+      chip.textContent = "💾 " + v.name;
+      chip.title = v.path;
+      chip.addEventListener("click", () => pickMOVs(v.path));
+      volList.appendChild(chip);
+    });
+    // always-present "เพิ่มไฟล์" button
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn btn-sm";
+    addBtn.textContent = "+ เลือกไฟล์วิดีโอ";
+    addBtn.addEventListener("click", () => pickMOVs());
+    volList.appendChild(addBtn);
+  });
+
   document.getElementById("btn-pick-wav").addEventListener("click", async () => {
-    const p = await Modal.open({ title: "เลือก WAV (.wav/.aif/.flac)", kind: "audio" });
+    const p = await NativePick.file("เลือกไฟล์ Master Audio (.wav / .aif / .flac)");
     if (p) {
       S.wavPath = p;
       wavDisplay.textContent = p.split("/").pop();
@@ -555,6 +411,12 @@ function initSources() {
         S.outDir = outDirInput.value;
       }
     }
+  });
+
+  document.getElementById("btn-pick-out").addEventListener("click", async () => {
+    const loc = S.wavPath ? S.wavPath.replace(/\/[^/]+$/, "") : "";
+    const p = await NativePick.folder("เลือก Output Folder", loc);
+    if (p) { outDirInput.value = p; S.outDir = p; }
   });
 
   document.getElementById("btn-default-out").addEventListener("click", () => {
@@ -577,7 +439,7 @@ function initSources() {
     showSection("sync");
   });
 
-  renderVolumes();
+  renderSelected();
 }
 
 // ── Sync section ────────────────────────────────────────────────────────────
@@ -776,9 +638,9 @@ function initRender() {
   const resultsCard = document.getElementById("render-results");
   const outputList = document.getElementById("render-output-list");
 
-  // watermark + endscreen pickers
+  // watermark + endscreen pickers — native macOS dialog
   document.getElementById("btn-pick-wm").addEventListener("click", async () => {
-    const p = await Modal.open({ title: "เลือก Watermark (.png)", kind: "image" });
+    const p = await NativePick.file("เลือก Watermark (.png)");
     if (p) {
       S.watermarkPath = p;
       document.getElementById("wm-display").textContent = p.split("/").pop();
@@ -789,7 +651,7 @@ function initRender() {
     document.getElementById("wm-display").textContent = "(ไม่ใส่)";
   });
   document.getElementById("btn-pick-es").addEventListener("click", async () => {
-    const p = await Modal.open({ title: "เลือก Endscreen (วิดีโอหรือรูป)", kind: "all" });
+    const p = await NativePick.file("เลือก Endscreen (วิดีโอหรือรูป)");
     if (p) {
       S.endscreenPath = p;
       document.getElementById("es-display").textContent = p.split("/").pop();

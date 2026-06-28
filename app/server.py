@@ -16,10 +16,11 @@ from app.api.files import router as files_router
 from app.api.pipeline import router as pipeline_router
 from app.api.render_api import router as render_router
 from app.api.jobs_api import router as jobs_router
+from app.api.pick_api import router as pick_router
 
 app = FastAPI(title="auto-cut", docs_url=None, redoc_url=None)
 
-for r in (files_router, pipeline_router, render_router, jobs_router):
+for r in (files_router, pipeline_router, render_router, jobs_router, pick_router):
     app.include_router(r, prefix="/api")
 
 _static = Path(__file__).parent / "static"
