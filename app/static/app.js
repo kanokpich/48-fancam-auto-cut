@@ -96,18 +96,31 @@ const Modal = (() => {
   async function browse(path) {
     _currentPath = path;
     crumbEl.textContent = path;
+    listEl.innerHTML = `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">⟳ กำลังโหลด...</div>`;
     const items = await api("GET", `/browse?path=${encodeURIComponent(path)}&kind=${_kind}`);
-    renderList(items);
+    renderList(items, path);
   }
 
-  function renderList(items) {
+  function renderList(items, currentPath) {
     listEl.innerHTML = "";
+
+    // back button
+    if (currentPath && currentPath !== "/Volumes") {
+      const parent = currentPath.split("/").slice(0, -1).join("/") || "/";
+      const back = document.createElement("div");
+      back.className = "modal-item is-dir";
+      back.innerHTML = `<span style="width:16px">↩</span><span style="color:var(--text-dim)">.. (ย้อนกลับ)</span>`;
+      back.addEventListener("click", () => browse(parent));
+      listEl.appendChild(back);
+    }
+
+    const fileIcon = { video: "🎬", audio: "🎵", image: "🖼", all: "📄" }[_kind] || "📄";
     items.forEach((item) => {
       const div = document.createElement("div");
       div.className = "modal-item" + (item.is_dir ? " is-dir" : "");
       if (_selected.has(item.path)) div.classList.add("selected");
       div.innerHTML = `
-        <span style="width:16px">${item.is_dir ? "📁" : "🎬"}</span>
+        <span style="width:16px">${item.is_dir ? "📁" : fileIcon}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${item.name}</span>
         ${!item.is_dir ? `<span class="modal-item-size">${fmtSize(item.size)}</span>` : ""}
       `;
@@ -135,6 +148,10 @@ const Modal = (() => {
       });
       listEl.appendChild(div);
     });
+
+    if (items.length === 0 && currentPath) {
+      listEl.innerHTML += `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">ไม่พบไฟล์ใน folder นี้</div>`;
+    }
   }
 
   function close() {
@@ -159,18 +176,20 @@ const Modal = (() => {
     _kind = kind;
     _multi = multi;
     _selected.clear();
+    _currentPath = null;
     titleEl.textContent = title;
     hintEl.textContent = multi ? "คลิกไฟล์เพื่อเลือก (หลายไฟล์ได้)" : "คลิกไฟล์เพื่อเลือก";
     el.classList.add("open");
 
-    // load volumes first
+    // show drives
+    listEl.innerHTML = `<div style="padding:10px 18px;color:var(--text-dim);font-size:12px">⟳ กำลังโหลด drives...</div>`;
+    crumbEl.textContent = "/ เลือก drive";
     const vols = await api("GET", "/volumes");
     listEl.innerHTML = "";
-    crumbEl.textContent = "/Volumes";
     vols.forEach((v) => {
       const div = document.createElement("div");
       div.className = "modal-item is-dir";
-      div.innerHTML = `<span style="width:16px">💾</span><span>${v.name}</span>`;
+      div.innerHTML = `<span style="width:16px">💾</span><span>${v.name}</span><span class="modal-item-size">${v.path}</span>`;
       div.addEventListener("click", () => browse(v.path));
       listEl.appendChild(div);
     });
@@ -459,40 +478,51 @@ function initSources() {
     browser.classList.remove("hidden");
     crumb.classList.remove("hidden");
     crumb.textContent = "📁 " + path;
+    browser.innerHTML = "<div style='padding:8px 12px;color:var(--text-dim);font-size:12px'>⟳ กำลังโหลด...</div>";
+    browser.scrollIntoView({ behavior: "smooth", block: "nearest" });
     const items = await api("GET", `/browse?path=${encodeURIComponent(path)}&kind=${kind}`);
     browser.innerHTML = "";
+
+    // back button when inside a subdirectory
+    const parent = path.split("/").slice(0, -1).join("/");
+    if (parent && parent !== "/" && path !== "/Volumes") {
+      const back = document.createElement("div");
+      back.className = "file-item is-dir";
+      back.innerHTML = `<span class="file-icon">↩</span><span style="color:var(--text-dim)">.. (ย้อนกลับ)</span>`;
+      back.addEventListener("click", () => loadBrowser(parent, kind));
+      browser.appendChild(back);
+    }
+
+    const ext = { video: "🎬", audio: "🎵", all: "📄" }[kind] || "📄";
     items.forEach((item) => {
       const div = document.createElement("div");
       div.className = "file-item" + (item.is_dir ? " is-dir" : "");
       if (!item.is_dir && S.movPaths.includes(item.path)) div.classList.add("selected");
       div.innerHTML = `
-        <span class="file-icon">${item.is_dir ? "📁" : "🎬"}</span>
+        <span class="file-icon">${item.is_dir ? "📁" : ext}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${item.name}</span>
         ${!item.is_dir ? `<span class="file-size">${fmtSize(item.size)}</span>` : ""}
       `;
       div.addEventListener("click", () => {
         if (item.is_dir) {
           loadBrowser(item.path, kind);
-        } else {
-          if (kind === "video") {
-            if (S.movPaths.includes(item.path)) {
-              S.movPaths = S.movPaths.filter((p) => p !== item.path);
-              div.classList.remove("selected");
-            } else {
-              S.movPaths.push(item.path);
-              div.classList.add("selected");
-            }
-            renderSelected();
-          } else if (kind === "audio") {
-            S.wavPath = item.path;
-            wavDisplay.textContent = item.name;
-            browser.classList.add("hidden");
-            crumb.classList.add("hidden");
+        } else if (kind === "video") {
+          if (S.movPaths.includes(item.path)) {
+            S.movPaths = S.movPaths.filter((p) => p !== item.path);
+            div.classList.remove("selected");
+          } else {
+            S.movPaths.push(item.path);
+            div.classList.add("selected");
           }
+          renderSelected();
         }
       });
       browser.appendChild(div);
     });
+
+    if (items.length === 0) {
+      browser.innerHTML += `<div style="padding:8px 12px;color:var(--text-dim);font-size:12px">ไม่พบไฟล์ใน folder นี้</div>`;
+    }
   }
 
   function renderSelected() {
@@ -515,8 +545,16 @@ function initSources() {
     });
   }
 
-  document.getElementById("btn-pick-wav").addEventListener("click", () => {
-    loadBrowser(browserPath || "/Volumes", "audio");
+  document.getElementById("btn-pick-wav").addEventListener("click", async () => {
+    const p = await Modal.open({ title: "เลือก WAV (.wav/.aif/.flac)", kind: "audio" });
+    if (p) {
+      S.wavPath = p;
+      wavDisplay.textContent = p.split("/").pop();
+      if (!outDirInput.value) {
+        outDirInput.value = p.replace(/\/[^/]+$/, "") + "/output";
+        S.outDir = outDirInput.value;
+      }
+    }
   });
 
   document.getElementById("btn-default-out").addEventListener("click", () => {
