@@ -338,6 +338,16 @@ function renderSongTable(songs, tbody, onUpdate) {
 }
 
 // ── Render progress ─────────────────────────────────────────────────────────
+function fmtEta(ms) {
+  if (!isFinite(ms) || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 5) return "<5s";
+  if (s < 60) return `~${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r > 0 ? `~${m}m${r}s` : `~${m}m`;
+}
+
 function makeProgressSection(container) {
   container.innerHTML = "";
   const rows = {};
@@ -350,7 +360,9 @@ function makeProgressSection(container) {
     div.className = "progress-row";
     div.innerHTML = `
       <span class="progress-label">${label}</span>
-      <div class="progress-bar"><div class="progress-fill" style="width:0%"></div></div>
+      <div class="progress-bar"><div class="progress-fill"></div></div>
+      <span class="progress-pct">0%</span>
+      <span class="progress-eta"></span>
       <span class="progress-status">⏳</span>
     `;
     container.appendChild(div);
@@ -363,6 +375,26 @@ function makeProgressSection(container) {
     div.className = "phase-label";
     div.textContent = text;
     container.appendChild(div);
+  }
+
+  function tickRow(row, done, total) {
+    if (!total) return;
+    const pct = Math.min(100, (done / total) * 100);
+    row.querySelector(".progress-fill").style.width = pct + "%";
+    row.querySelector(".progress-pct").textContent = Math.round(pct) + "%";
+
+    // ETA based on encode rate so far
+    if (!row._t0) { row._t0 = Date.now(); row._d0 = done; }
+    const elapsed = Date.now() - row._t0;
+    const doneSoFar = done - row._d0;
+    const etaEl = row.querySelector(".progress-eta");
+    if (doneSoFar > 1 && pct < 99) {
+      const rate = doneSoFar / elapsed;           // video-s per ms
+      const etaMs = (total - done) / rate;
+      etaEl.textContent = fmtEta(etaMs);
+    } else if (pct >= 99) {
+      etaEl.textContent = "";
+    }
   }
 
   return {
@@ -381,18 +413,21 @@ function makeProgressSection(container) {
     onSongBegin(label, total) {
       currentLabel = label;
       currentTotal = total;
-      addRow(label);
+      const row = addRow(label);
+      row._t0 = Date.now();
+      row._d0 = 0;
     },
     onTick(done) {
       if (!currentLabel || !currentTotal) return;
-      const pct = Math.min(100, (done / currentTotal) * 100);
       const row = rows[currentLabel];
-      if (row) row.querySelector(".progress-fill").style.width = pct + "%";
+      if (row) tickRow(row, done, currentTotal);
     },
     onSongDone(entry) {
       const row = rows[entry.label];
       if (!row) return;
       row.querySelector(".progress-fill").style.width = "100%";
+      row.querySelector(".progress-pct").textContent = "100%";
+      row.querySelector(".progress-eta").textContent = "";
       const st = row.querySelector(".progress-status");
       if (entry.status === "ok") {
         st.textContent = "✓"; st.className = "progress-status ok";
@@ -403,12 +438,14 @@ function makeProgressSection(container) {
     },
     onPhaseBegin(total) {
       currentTotal = total;
-      currentLabel = "__phase__";
-      const label = container.querySelectorAll(".phase-label");
-      const last = label[label.length - 1];
+      const labels = container.querySelectorAll(".phase-label");
+      const last = labels[labels.length - 1];
       const ph = last?.textContent || "phase";
       const key = ph + "_combine";
-      if (!rows[key]) addRow(key).querySelector(".progress-label").textContent = ph;
+      const row = rows[key] || addRow(key);
+      row.querySelector(".progress-label").textContent = ph;
+      row._t0 = Date.now();
+      row._d0 = 0;
       currentLabel = key;
     },
   };
